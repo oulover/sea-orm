@@ -1,14 +1,14 @@
-use super::attributes::{column_attr, compound_attr};
+use super::attributes::compound_attr;
 use super::entity_loader::{EntityLoaderField, EntityLoaderSchema, expand_entity_loader};
-use super::model::DeriveModel;
 use super::util::{format_field_ident_ref, is_compound_field};
+use super::{expand_typed_column, model::DeriveModel};
 use heck::ToUpperCamelCase;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{format_ident, quote};
 use std::collections::{BTreeMap, HashMap};
 use syn::{
-    Attribute, Data, Fields, ItemStruct, LitStr, Meta, Type, parse_quote, punctuated::Punctuated,
-    token::Comma,
+    Attribute, Data, Expr, Fields, ItemStruct, Lit, Meta, Type, parse_quote,
+    punctuated::Punctuated, token::Comma,
 };
 
 pub fn expand_sea_orm_model(input: ItemStruct, compact: bool) -> syn::Result<TokenStream> {
@@ -86,7 +86,6 @@ pub fn expand_derive_model_ex(
     data: Data,
     attrs: Vec<Attribute>,
 ) -> syn::Result<TokenStream> {
-    let mut table_name = None;
     let mut compact = false;
     let mut model_fields: Vec<Ident> = Vec::new();
     let mut compound_fields: Vec<Ident> = Vec::new();
@@ -99,10 +98,11 @@ pub fn expand_derive_model_ex(
         .filter(|attr| attr.path().is_ident("sea_orm"))
         .try_for_each(|attr| {
             attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("table_name") {
-                    table_name = Some(meta.value()?.parse::<LitStr>()?);
-                } else if meta.path.is_ident("compact_model") {
+                if meta.path.is_ident("compact_model") {
                     compact = true;
+                } else {
+                    // Reads the value expression to advance the parse stream.
+                    let _: Option<Expr> = meta.value().and_then(|v| v.parse()).ok();
                 }
                 Ok(())
             })
@@ -147,21 +147,59 @@ pub fn expand_derive_model_ex(
                                     ident,
                                     "You cannot use #[has_one / has_many / belongs_to] on #[sea_orm::compact_model], please use #[sea_orm::model] instead.",
                                 ));
+                            } else if attrs.belongs_to.is_some()
+                                && !field_type.starts_with("HasOne<")
+                            {
+                                return Err(syn::Error::new_spanned(
+                                    ident,
+                                    "belongs_to must be paired with HasOne",
+                                ));
+                            } else if attrs.has_one.is_some() && !field_type.starts_with("HasOne<")
+                            {
+                                return Err(syn::Error::new_spanned(
+                                    ident,
+                                    "has_one must be paired with HasOne",
+                                ));
+                            } else if attrs.has_many.is_some()
+                                && !field_type.starts_with("HasMany<")
+                            {
+                                return Err(syn::Error::new_spanned(
+                                    ident,
+                                    "has_many must be paired with HasMany",
+                                ));
                             }
                             impl_related.push((attrs, field_type));
                         }
                         compound_fields.push(format_field_ident_ref(field));
                     } else {
-                        if let Ok(attrs) = column_attr::SeaOrm::from_attributes(&field.attrs) {
-                            if attrs.unique.is_some() {
-                                unique_keys
-                                    .insert(ident.clone(), vec![(ident.clone(), field.ty.clone())]);
-                            }
-                            if let Some(unique_key) = attrs.unique_key {
-                                unique_keys
-                                    .entry(unique_key.parse()?)
-                                    .or_default()
-                                    .push((ident.clone(), field.ty.clone()));
+                        for attr in field.attrs.iter() {
+                            if attr.path().is_ident("sea_orm") {
+                                attr.parse_nested_meta(|meta| {
+                                    if meta.path.is_ident("unique") {
+                                        unique_keys.insert(
+                                            ident.clone(),
+                                            vec![(ident.clone(), field.ty.clone())],
+                                        );
+                                    } else if meta.path.is_ident("unique_key") {
+                                        let lit = meta.value()?.parse()?;
+                                        if let Lit::Str(litstr) = lit {
+                                            unique_keys
+                                                .entry(litstr.parse()?)
+                                                .or_default()
+                                                .push((ident.clone(), field.ty.clone()));
+                                        } else {
+                                            return Err(
+                                                meta.error(format!("Invalid unique_key {lit:?}"))
+                                            );
+                                        }
+                                    } else {
+                                        // Reads the value expression to advance the parse stream.
+                                        let _: Option<Expr> =
+                                            meta.value().and_then(|v| v.parse()).ok();
+                                    }
+
+                                    Ok(())
+                                })?;
                             }
                         }
                         model_fields.push(format_field_ident_ref(field));
@@ -244,7 +282,7 @@ pub fn expand_derive_model_ex(
             }
             if *seen.get(field_type).unwrap() == 1 {
                 // prevent impl trait for same entity twice
-                ts.extend(expand_impl_related_trait(attrs, field_type, &table_name)?);
+                ts.extend(expand_impl_related_trait(attrs, field_type)?);
             }
         }
 
@@ -277,11 +315,17 @@ pub fn expand_derive_model_ex(
         quote!()
     };
 
+    let (typed_column, typed_column_const) = expand_typed_column(&data)?;
+
     let (entity_find_by_key, loader_filter_by_key) = expand_find_by_unique_key(unique_keys);
 
     let entity_loader = expand_entity_loader(entity_loader_schema);
 
     Ok(quote! {
+        #typed_column
+
+        #typed_column_const
+
         #impl_from_model
 
         #impl_model_trait
@@ -295,6 +339,9 @@ pub fn expand_derive_model_ex(
         #entity_loader
 
         impl Entity {
+            #[doc = " Generated by sea-orm-macros"]
+            pub const COLUMN: TypedColumn = COLUMN;
+
             #entity_find_by_key
         }
 
@@ -336,6 +383,9 @@ fn relation_enum_variant(attr: &compound_attr::SeaOrm, ty: &str) -> Option<Token
             let tag = Ident::new("on_delete", on_delete.span());
             extra.push(quote!(#tag = #on_delete))
         }
+        if let Some(()) = &attr.skip_fk {
+            extra.push(quote!(skip_fk))
+        }
 
         Some(quote! {
             #[doc = " Generated by sea-orm-macros"]
@@ -371,6 +421,9 @@ fn relation_enum_variant(attr: &compound_attr::SeaOrm, ty: &str) -> Option<Token
         if let Some(on_delete) = &attr.on_delete {
             let tag = Ident::new("on_delete", on_delete.span());
             extra.push(quote!(#tag = #on_delete))
+        }
+        if let Some(()) = &attr.skip_fk {
+            extra.push(quote!(skip_fk))
         }
 
         Some(quote! {
@@ -450,46 +503,36 @@ fn related_entity_enum_variant(
     (first, second)
 }
 
-fn expand_impl_related_trait(
-    attr: &compound_attr::SeaOrm,
-    ty: &str,
-    table_name: &Option<LitStr>,
-) -> syn::Result<TokenStream> {
+fn expand_impl_related_trait(attr: &compound_attr::SeaOrm, ty: &str) -> syn::Result<TokenStream> {
     if attr.has_one.is_some() || attr.has_many.is_some() || attr.belongs_to.is_some() {
         let (related_entity, relation_enum) = get_related(attr, ty);
         let related_entity: TokenStream = related_entity.parse().unwrap();
 
-        if let Some(via) = &attr.via {
-            let via = via.value();
+        if let Some(via_lit) = &attr.via {
+            let via = via_lit.value();
             let mut junction = via.as_str();
-            let via_related = table_name
-                .as_ref()
-                .map(|v| v.value().to_upper_camel_case())
-                .unwrap_or_default();
-            let mut via_related = via_related.as_str();
+            let mut via_related = "";
             if let Some((prefix, suffix)) = via.split_once("::") {
                 junction = prefix;
                 via_related = suffix;
             }
-            if via_related.is_empty() {
-                return Err(syn::Error::new_spanned(
-                    attr.via.as_ref().unwrap(),
-                    "Please provide via in `my_entity::RelationVariant`",
-                ));
-            }
-            let junction = Ident::new(junction, Span::call_site());
-            let relation_def = quote!(Relation::#relation_enum.def());
-            let via_relation_def: TokenStream =
-                format!("Relation::{via_related}.def()").parse().unwrap();
+            let junction = Ident::new(junction, via_lit.span());
+            let relation_def = quote!(super::#junction::Relation::#relation_enum.def());
+            let via_relation_def: TokenStream = if !via_related.is_empty() {
+                let via_related = Ident::new(via_related, via_lit.span());
+                quote!(super::#junction::Relation::#via_related.def().rev())
+            } else {
+                quote!(<super::#junction::Entity as Related<Entity>>::to().rev())
+            };
 
             Ok(quote! {
                 #[doc = " Generated by sea-orm-macros"]
                 impl Related<#related_entity> for Entity {
                     fn to() -> RelationDef {
-                        super::#junction::#relation_def
+                        #relation_def
                     }
                     fn via() -> Option<RelationDef> {
-                        Some(super::#junction::#via_relation_def.rev())
+                        Some(#via_relation_def)
                     }
                 }
             })
@@ -574,6 +617,7 @@ fn expand_find_by_unique_key(
     for (name, columns) in unique_keys {
         let find_method = format_ident!("find_by_{}", name);
         let filter_method = format_ident!("filter_by_{}", name);
+        let delete_method = format_ident!("delete_by_{}", name);
         if columns.len() > 1 {
             let key_type = columns.iter().map(|(_, ty)| ty).collect::<Vec<_>>();
 
@@ -591,6 +635,12 @@ fn expand_find_by_unique_key(
                 #[doc = " Generated by sea-orm-macros"]
                 pub fn #find_method(v: (#(#key_type),*)) -> Select<Entity> {
                     Self::find()
+                        #(.filter(#filters))*
+                }
+
+                #[doc = " Generated by sea-orm-macros"]
+                pub fn #delete_method(v: (#(#key_type),*)) -> sea_orm::ValidatedDeleteOne<Entity> {
+                    sea_orm::Delete::_one_only_for_use_by_model_ex(Entity)
                         #(.filter(#filters))*
                 }
             });
