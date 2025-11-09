@@ -369,111 +369,54 @@ pub(crate) fn from_sqlx_mysql_row_to_proxy_row(row: &sqlx::mysql::MySqlRow) -> c
                 (
                     c.name().to_string(),
                     match c.type_info().name() {
-                        "TINYINT(1)" | "BOOLEAN" => Value::Bool(Some(
-                            row.try_get(c.ordinal()).expect("Failed to get boolean"),
-                        )),
-                        "TINYINT UNSIGNED" => Value::TinyUnsigned(Some(
-                            row.try_get(c.ordinal())
-                                .expect("Failed to get unsigned tiny integer"),
-                        )),
-                        "SMALLINT UNSIGNED" => Value::SmallUnsigned(Some(
-                            row.try_get(c.ordinal())
-                                .expect("Failed to get unsigned small integer"),
-                        )),
-                        "INT UNSIGNED" => Value::Unsigned(Some(
-                            row.try_get(c.ordinal())
-                                .expect("Failed to get unsigned integer"),
-                        )),
-                        "MEDIUMINT UNSIGNED" | "BIGINT UNSIGNED" => Value::BigUnsigned(Some(
-                            row.try_get(c.ordinal())
-                                .expect("Failed to get unsigned big integer"),
-                        )),
-                        "TINYINT" => Value::TinyInt(Some(
-                            row.try_get(c.ordinal())
-                                .expect("Failed to get tiny integer"),
-                        )),
-                        "SMALLINT" => Value::SmallInt(Some(
-                            row.try_get(c.ordinal())
-                                .expect("Failed to get small integer"),
-                        )),
-                        "INT" => Value::Int(Some(
-                            row.try_get(c.ordinal()).expect("Failed to get integer"),
-                        )),
-                        "MEDIUMINT" | "BIGINT" => Value::BigInt(Some(
-                            row.try_get(c.ordinal()).expect("Failed to get big integer"),
-                        )),
-                        "FLOAT" => Value::Float(Some(
-                            row.try_get(c.ordinal()).expect("Failed to get float"),
-                        )),
-                        "DOUBLE" => Value::Double(Some(
-                            row.try_get(c.ordinal()).expect("Failed to get double"),
-                        )),
+                        "TINYINT(1)" | "BOOLEAN" => Value::Bool(row.try_get(c.ordinal()).ok()),
+                        "TINYINT UNSIGNED" => Value::TinyUnsigned(row.try_get(c.ordinal()).ok()),
+                        "SMALLINT UNSIGNED" => Value::SmallUnsigned(row.try_get(c.ordinal()).ok()),
+                        "INT UNSIGNED" => Value::Unsigned(row.try_get(c.ordinal()).ok()),
+                        "MEDIUMINT UNSIGNED" | "BIGINT UNSIGNED" => Value::BigUnsigned(row.try_get(c.ordinal()).ok()),
+                        "TINYINT" => Value::TinyInt(row.try_get(c.ordinal()).ok()),
+                        "SMALLINT" => Value::SmallInt(row.try_get(c.ordinal()).ok()),
+                        "INT" => Value::Int(row.try_get(c.ordinal()).ok()),
+                        "MEDIUMINT" | "BIGINT" => Value::BigInt(row.try_get(c.ordinal()).ok()),
+                        "FLOAT" => Value::Float(row.try_get(c.ordinal()).ok()),
+                        "DOUBLE" => Value::Double(row.try_get(c.ordinal()).ok()),
 
                         "BIT" | "BINARY" | "VARBINARY" | "TINYBLOB" | "BLOB" | "MEDIUMBLOB"
-                        | "LONGBLOB" => Value::Bytes(Some(Box::new(
-                            row.try_get(c.ordinal()).expect("Failed to get bytes"),
-                        ))),
+                        | "LONGBLOB" => Value::Bytes(row.try_get(c.ordinal()).ok()),
 
                         "CHAR" | "VARCHAR" | "TINYTEXT" | "TEXT" | "MEDIUMTEXT" | "LONGTEXT" => {
-                            Value::String(Some(Box::new(
-                                row.try_get(c.ordinal()).expect("Failed to get string"),
-                            )))
+                            Value::String(row.try_get(c.ordinal()).ok())
                         }
 
                         #[cfg(feature = "with-chrono")]
-                        "TIMESTAMP" => Value::ChronoDateTimeUtc(Some(Box::new(
-                            row.try_get(c.ordinal()).expect("Failed to get timestamp"),
-                        ))),
+                        "TIMESTAMP" => Value::ChronoDateTimeUtc(row.try_get(c.ordinal()).ok()),
                         #[cfg(all(feature = "with-time", not(feature = "with-chrono")))]
-                        "TIMESTAMP" => Value::TimeDateTime(Some(Box::new(
-                            row.try_get(c.ordinal()).expect("Failed to get timestamp"),
-                        ))),
+                        "TIMESTAMP" => Value::TimeDateTime(row.try_get(c.ordinal()).ok()),
 
                         #[cfg(feature = "with-chrono")]
-                        "DATE" => Value::ChronoDate(Some(Box::new(
-                            row.try_get(c.ordinal()).expect("Failed to get date"),
-                        ))),
+                        "DATE" => Value::ChronoDate(row.try_get(c.ordinal()).ok()),
                         #[cfg(all(feature = "with-time", not(feature = "with-chrono")))]
-                        "DATE" => Value::TimeDate(Some(Box::new(
-                            row.try_get(c.ordinal()).expect("Failed to get date"),
-                        ))),
+                        "DATE" => Value::TimeDate(row.try_get(c.ordinal()).ok()),
 
                         #[cfg(feature = "with-chrono")]
-                        "TIME" => Value::ChronoTime(Some(Box::new(
-                            row.try_get(c.ordinal()).expect("Failed to get time"),
-                        ))),
+                        "TIME" => Value::ChronoTime(row.try_get(c.ordinal()).ok()),
                         #[cfg(all(feature = "with-time", not(feature = "with-chrono")))]
-                        "TIME" => Value::TimeTime(Some(Box::new(
-                            row.try_get(c.ordinal()).expect("Failed to get time"),
-                        ))),
+                        "TIME" => Value::TimeTime(row.try_get(c.ordinal()).ok()),
 
                         #[cfg(feature = "with-chrono")]
-                        "DATETIME" => Value::ChronoDateTime(Some(Box::new(
-                            row.try_get(c.ordinal()).expect("Failed to get datetime"),
-                        ))),
+                        "DATETIME" => Value::ChronoDateTime(row.try_get(c.ordinal()).ok()),
                         #[cfg(all(feature = "with-time", not(feature = "with-chrono")))]
-                        "DATETIME" => Value::TimeDateTime(Some(Box::new(
-                            row.try_get(c.ordinal()).expect("Failed to get datetime"),
-                        ))),
+                        "DATETIME" => Value::TimeDateTime(row.try_get(c.ordinal()).ok()),
 
                         #[cfg(feature = "with-chrono")]
-                        "YEAR" => Value::ChronoDate(Some(Box::new(
-                            row.try_get(c.ordinal()).expect("Failed to get year"),
-                        ))),
+                        "YEAR" => Value::ChronoDate(row.try_get(c.ordinal()).ok()),
                         #[cfg(all(feature = "with-time", not(feature = "with-chrono")))]
-                        "YEAR" => Value::TimeDate(Some(Box::new(
-                            row.try_get(c.ordinal()).expect("Failed to get year"),
-                        ))),
+                        "YEAR" => Value::TimeDate(row.try_get(c.ordinal()).ok()),
 
-                        "ENUM" | "SET" | "GEOMETRY" => Value::String(Some(Box::new(
-                            row.try_get(c.ordinal())
-                                .expect("Failed to get serialized string"),
-                        ))),
+                        "ENUM" | "SET" | "GEOMETRY" => Value::String(row.try_get(c.ordinal()).ok()),
 
                         #[cfg(feature = "with-bigdecimal")]
-                        "DECIMAL" => Value::BigDecimal(Some(Box::new(
-                            row.try_get(c.ordinal()).expect("Failed to get decimal"),
-                        ))),
+                        "DECIMAL" => Value::BigDecimal( row.try_get(c.ordinal()).ok().map(Box::new) ),
                         #[cfg(all(
                             feature = "with-rust_decimal",
                             not(feature = "with-bigdecimal")
@@ -483,9 +426,7 @@ pub(crate) fn from_sqlx_mysql_row_to_proxy_row(row: &sqlx::mysql::MySqlRow) -> c
                         ))),
 
                         #[cfg(feature = "with-json")]
-                        "JSON" => Value::Json(Some(Box::new(
-                            row.try_get(c.ordinal()).expect("Failed to get json"),
-                        ))),
+                        "JSON" => Value::Json(row.try_get(c.ordinal()).ok()),
 
                         _ => unreachable!("Unknown column type: {}", c.type_info().name()),
                     },
